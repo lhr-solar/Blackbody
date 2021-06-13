@@ -4,3 +4,6 @@ projectfiles
 *.py*
 BUILD
 
+array-shared-components
+array-shared-components/mbed-os_temp
+mbed-os

@@ -1,81 +1,164 @@
+/**
+ * Project: Standalone Irradiance Board Firmware
+ * File: main.cpp
+ * Author: Matthew Yu (2021).
+ * Organization: UT Solar Vehicles Team
+ * Created on: 05/24/21
+ * Last Modified: 06/12/21
+ * File Description: This file describes the operation and execution of the
+ * Standalone Irradiance Board for the UT LHR Solar Vehicles Team. 
+ * L432KC Pinout:
+ * https://os.mbed.com/media/uploads/bcostm/nucleo_l432kc_2017_10_09.png
+ */
+
+/** Library Imports. */
 #include "mbed.h"
 #include <chrono> 
 
+/** Custom Imports. */
+#include <src/Error/Errors.h>
+#include <src/Sensor/Sensor.h>
+#include <src/Message/Message.h>
+#include <src/ComDevice/ComDevice.h>
+#include <src/I2cSensor/IrradianceI2cSensor.h>
 
-// main() runs in its own thread in the OS
-
-// CAN Rx is pin D10, CAN Tx is pin D2
-#define CAN_Rx D10
+#define IRRAD_SENSOR_ID 0x630
 #define CAN_Tx D2
+#define CAN_Rx D10
+#define USB_TX USBTX
+#define USB_RX USBRX
+#define SDA D0
+#define SCL D1
+#define HEARTBEAT_LED D3
+#define PERIOD_HEARTBEAT_MS 500
 
-std::chrono::milliseconds csec(100);
-Ticker ticker;
-// Initialize CAN driver and UART driver. CAN driver communicates with IV curve tracer, UART communicates with computer over USB
-CAN can1(CAN_Rx, CAN_Tx);
+/** Variable Declarations. */
+bool captureFlag = false;
+enum DeviceState {OFF, ON, ERR} deviceState = ON;
 
+/** Heartbeat LED. */
+DigitalOut ledHeartbeat(HEARTBEAT_LED);
+LowPowerTicker tickHeartbeat;
 
-// L432KC pin reference https://os.mbed.com/media/uploads/bcostm/nucleo_l432kc_2017_10_09.png
+/** Communication Device. */
+#define COM_RATE_MS 300
+// ComDevice transceiver(ComDevice::CAN, CAN_TX, CAN_RX);
+ComDevice transceiver(ComDevice::SERIAL, USB_TX, USB_RX);
 
-/* CAN IDs
+/** TSL2591 Sensor Device. */
+#define SEN_RATE_MS 500
+IrradianceI2cSensor irradSensor(SDA, SCL);
+LowPowerTicker tickSendData;
 
-Irradiance Sensor 1 Measurement	Irradiance/RTD output	x630	"Data:
-[31:0] : Irradiance measurement (W/m^2, signed float)
-Frequency: 10Hz"
+/** Error Code. */
+uint8_t errorCode = ERR_NONE;
 
-Irradiance/RTD Board Enable/Disable command	Irradiance/RTD input	x632	"Data: [0:0]
-1 - Halt the board measurement and output and put into idle/low power state.
-0 - Restart the board measurement and output.
-Frequency: On demand in specific occasions."
+/** Function Declaration and Implementation. */
+void heartbeat(void) { ledHeartbeat = !ledHeartbeat; }
 
-Irradiance/RTD Board Fault	Irradiance/RTD output	x633	"Data: [7:0]: Error ID
-Frequency: On Demand"
-*/
-
-
-/*This measurement method is supposed to capture integration result from TSL2591 sensor, 
-convert it to W/m^2, and send it across USB UART and CAN
-*/
-void measure()
-{
-    static double measurement;
-    //Step 1: measure TSL2591 device over I2C
-    //int write()
-    //Step 2: linearize output, convert to W/m^2
-    //Step 3: send across CAN and UART
-    unsigned char measurement_normalized = measurement;
-    if(can1.write(CANMessage(0x630, &measurement_normalized, 8))) 
-    {
-        printf("Measurement (W/m^2): %f\n", measurement);
-    }
+void raiseCaptureFlag(void) {
+    captureFlag = true;
 }
 
-void sendError(const unsigned char *error)
-{
-    if(can1.write(CANMessage(0x633, error, 8))) 
-    {
-        printf("Program error  %s\n", error);
-        
-    }
-    //Go into low power mode (stop transmitting, stop measuring)
-    //To stop measuring, stop ticker
-    ticker.detach();
-    //Turn back on when curve tracer gives signal to restart measurment/outputt (ID 0x632, data 0)
+void raiseError(uint8_t errorCode) {
+    Message message = Message(0x633, (uint64_t) errorCode);
+    /* Send message over com. */
+    transceiver.sendMessage(&message);
 }
 
-int main()
-{
-    ticker.attach(&measure, std::chrono::microseconds(csec));
+int main() {
+    /* Initialize heartbeat to toggle at 0.5*3 s (OFF). */
+    ledHeartbeat = 1;
+    tickHeartbeat.attach(
+        &heartbeat, 
+        std::chrono::milliseconds(PERIOD_HEARTBEAT_MS*3));
 
-    CANMessage msg;
-    while (true) 
-    {
-        if(can1.read(msg)) 
-        {
-            printf("Message received: %d\n\n", msg.data[0]); 
-            //Halt or restart based on message ID 0x632 (implement later)
-            //If CAN message and ID match restart, reattach ticker
-            ticker.attach(&measure, std::chrono::microseconds(csec));
+    /* Accept only input message IDs defined in the README.md. */
+    transceiver.addCanIdFilter(0x632);
+    /* Initialize ComDevice to spit out data to serial. */
+    transceiver.startMs(COM_RATE_MS);
+
+    /* Reset variable is set when the device was recently in an OFF or ERROR
+       state. */
+    DeepSleepLock lock;
+    bool reset = true;
+    while (true) {
+        /* Sidenote: if this way of writing programs seems familiar, it's because
+           it is emulating Verilog. The first block updates the state, and the
+           second block acts on the state. */
+
+        /* Get latest message in com buffer. */
+        Message message;
+        if (transceiver.getMessage(&message)) {
+            uint16_t msgId = message.getMessageID();
+            switch (msgId) {
+                case 0x632: { /* Blackbody Enable/Disable. */
+                        uint64_t data = message.getMessageDataU();
+                        if (data == 0) deviceState = ON;
+                        else if (data == 1) deviceState = OFF;
+                        else {
+                            deviceState = ERR;
+                            errorCode = ERR_INVALID_CAN_DATA;
+                        }
+                    }
+                    break;
+                default:
+                    deviceState = ERR;
+                    errorCode = ERR_INVALID_CAN_ID;
+            }
+        }
+
+        switch (deviceState) {
+            case ON:
+                /* Nominal operation. */
+                /* On reset. */
+                if (reset) {
+                    irradSensor.startMs(SEN_RATE_MS);
+                    tickSendData.attach(
+                        &raiseCaptureFlag, 
+                        std::chrono::milliseconds(SEN_RATE_MS));
+                    tickHeartbeat.attach(
+                        &heartbeat, 
+                        std::chrono::milliseconds(PERIOD_HEARTBEAT_MS));
+                    reset = false;
+                }
+
+                /* On sensor capture. */
+                if (captureFlag) {
+                    /* Capture buffered sensor data. */
+                    float data = 10.12;//irradSensor.getValue();
+                    Message message = Message(IRRAD_SENSOR_ID, (int64_t) (data * 100));
+
+                    /* Send message over com. */
+                    transceiver.sendMessage(&message);
+                    captureFlag = false;
+                }
+                break;
+            case OFF:
+                /* Device is sleeping until notified. */
+                if (!reset) {
+                    tickSendData.detach();
+                    tickHeartbeat.attach(
+                        &heartbeat, 
+                        std::chrono::milliseconds(PERIOD_HEARTBEAT_MS*3));
+                    reset = true;
+                }
+                break;
+            default:
+                errorCode = ERR_BAD_STATE;
+                reset = false;
+            case ERR:
+                /* Error event. How this is handled depends on the board, but in
+                   this case we raise an error and turn off the heartbeat. The
+                   board can be restarted through com like the OFF state. */
+                if (!reset) {
+                    tickSendData.detach();
+                    tickHeartbeat.detach();
+                    ledHeartbeat = 0;
+                    raiseError(errorCode);
+                    reset = true;
+                }
+                break;
         }
     }
 }
-
