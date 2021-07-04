@@ -68,8 +68,8 @@ for each context will be treated as software exceptions and reported to the user
 ## CAN communication protocol.
 
 The CAN communication protocol concerns the transmission of messages from the
-Blackbody boards. All messages are input sans the Blackbody Enable/Disable
-command; the user, through the PV Curve Tracer can disable external sensor input
+Blackbody boards. All messages are output sans the Blackbody Enable/Disable
+command; the user, through the PV Curve Tracer can disable external sensor output
 messages through this command.
 
 | Name                                      | Direction | ID    | Data Width [L:S]   | Data Type                    | Frequency |

@@ -64,6 +64,8 @@ struct result {
 };
 
 /** Function definitions. */
+int mainB(void);
+
 /** Indicator management. */
 static void cycleLed(DigitalOut *dout, uint8_t numCycles, std::chrono::milliseconds delayMs);
 static void heartbeat(void);

@@ -48,7 +48,7 @@ static bool sampleEnable;
 static bool isReadyIrrad, isReadyTemp;
 
 /** Main routine. */
-int main() {
+int mainA() {
     /* Setup serial comm. */
     serialPort.set_baud(9600);
     serialPort.set_format(

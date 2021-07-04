@@ -68,6 +68,8 @@ struct result {
 };
 
 /** Function definitions. */
+int mainA(void);
+
 /** Indicator Management. */
 static void cycleLed(DigitalOut *dout, uint8_t numCycles, std::chrono::milliseconds delayMs);
 
