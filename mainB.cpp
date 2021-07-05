@@ -72,6 +72,10 @@ int mainB() {
     /* Start execution of the TSL2591 sensor. */
     tsl2591.start(chrono::milliseconds(1000 / SAMPLE_FREQ_HZ_IRRAD));
 
+    /* Start threads for output message processing. */
+    Thread threadProcessing;
+    threadProcessing.start(callback(&queue, &EventQueue::dispatch_forever));
+
     while (true) {
         pollCan();
         ThisThread::sleep_for(chrono::milliseconds(100));

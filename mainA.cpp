@@ -75,6 +75,10 @@ int mainA() {
     /* Start execution of the MAX31865 sensor. */
     max31865.start(chrono::milliseconds(1000 / SAMPLE_FREQ_HZ_TEMP));
 
+    /* Start threads for output message processing. */
+    Thread threadProcessing;
+    threadProcessing.start(callback(&queue, &EventQueue::dispatch_forever));
+    
     while (true) {
         pollCan();
         ThisThread::sleep_for(chrono::milliseconds(100));
