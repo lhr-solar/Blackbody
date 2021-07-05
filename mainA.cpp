@@ -1,5 +1,5 @@
 /**
- * Project: Blackbody A Board
+ * Project: Blackbody A
  * File: mainA.cpp
  * Author: Matthew Yu (2021).
  * Organization: UT Solar Vehicles Team
@@ -29,9 +29,12 @@
  * L432KC specific.
  */
 
-
 /** Includes. */
 #include "mainA.hpp"
+#include <chrono>
+
+/** Data structures. */
+static EventQueue queue(QUEUE_SIZE * EVENTS_EVENT_SIZE);
 
 /** LEDs. */
 DigitalOut ledCanTxA(CAN_TX);
@@ -43,9 +46,12 @@ DigitalOut ledError(A5);
 static BufferedSerial serialPort(USB_TX, USB_RX); /* USB debugging. */
 static CAN canPort(CAN_RX, CAN_TX);
 
-/** Globals. */
-static bool sampleEnable;
-static bool isReadyIrrad, isReadyTemp;
+/** Sensor. */
+static I2C i2c(I2C_SDA, I2C_SCL);
+static IrradI2cSensor tsl2591(&i2c, &queue, &processIrradianceResult);
+#define SELECT SPI_CS0
+static SPI spi(SPI_SDO, SPI_SDI, SPI_CLK, SELECT);
+static TempSpiSensor max31865(&spi, &queue, &processTemperatureResult);
 
 /** Main routine. */
 int mainA() {
@@ -63,21 +69,11 @@ int mainA() {
     cycleLed(&ledTracking, 4, std::chrono::milliseconds(100));
     cycleLed(&ledError, 4, std::chrono::milliseconds(100));
 
-    /* Start thread for sampling and processing sensor data. */
-    isReadyIrrad = false;
-    isReadyTemp = false;
-    LowPowerTicker tickerIrrad;
-    tickerIrrad.attach(
-        callback(&setReadyIrrad), 
-        chrono::milliseconds(1000 / SAMPLE_FREQ_HZ_IRRAD)
-    );
-    LowPowerTicker tickerTemp;
-    tickerTemp.attach(
-        callback(&setReadyTemp), 
-        chrono::milliseconds(1000 / SAMPLE_FREQ_HZ_TEMP)
-    );
-    Thread threadTesting;
-    threadTesting.start(performTest);
+    /* Start execution of the TSL2591 sensor. */
+    tsl2591.start(chrono::milliseconds(1000 / SAMPLE_FREQ_HZ_IRRAD));
+
+    /* Start execution of the MAX31865 sensor. */
+    max31865.start(chrono::milliseconds(1000 / SAMPLE_FREQ_HZ_TEMP));
 
     while (true) {
         pollCan();
@@ -95,49 +91,6 @@ static void cycleLed(DigitalOut *dout, uint8_t numCycles, std::chrono::milliseco
     }
 }
 
-/** Sampling sensor data. */
-static void sampleTempSensor(void) {
-    /* For each temperature sensor active. */
-    for (uint8_t i = 0; i < MAX_TEMP_SENSORS; ++i) {
-        struct result res = {
-            .sensorType = result::TEMPERATURE,
-            .sensorId = i, /* TSL2591 only has one I2C address. */
-            .value = 0.0
-        };
-
-        /* TODO: Sample MAX31865. */
-
-        processTemperatureResult(BLKBDY_TEMP_MEAS, res);
-    }
-}
-static void sampleIrradianceSensor(void) {
-    struct result res = {
-        .sensorType = result::IRRADIANCE,
-        .sensorId = 0x29, /* TSL2591 only has one I2C address. */
-        .value = 0.0
-    };
-
-    /* TODO: Sample TSL2591. */
-
-    processIrradianceResult(BLKBDY_IRRAD_1_MEAS, res);
-}
-static void setReadyIrrad(void) { isReadyIrrad = true; }
-static void setReadyTemp(void) { isReadyTemp = true; }
-static void performTest(void) {
-    while (true) {
-        if (sampleEnable) {
-            if (isReadyIrrad) {
-                sampleIrradianceSensor();
-                isReadyIrrad = false;
-            }
-            if (isReadyTemp) {
-                sampleTempSensor();
-                isReadyTemp = false;
-            }
-        }
-    }
-}
-
 /** Communication Input Processing. */
 static void pollCan(void) {
     static CANMessage msg;
@@ -150,10 +103,13 @@ static void pollCan(void) {
                    Everything else is an error. */
                 if (msg.len != 1) { 
                     processError(BLKBDY_FAULT, ERR_INVALID_MSG_DATA_LEN, msg.len);
-                }
-                else if (msg.data[0] == 0) { sampleEnable = true; }
-                else if (msg.data[0] == 1) { sampleEnable = false; }
-                else {
+                } else if (msg.data[0] == 0) { 
+                    tsl2591.start(chrono::milliseconds(1000 / SAMPLE_FREQ_HZ_IRRAD));
+                    max31865.start(chrono::milliseconds(1000 / SAMPLE_FREQ_HZ_TEMP));
+                } else if (msg.data[0] == 1) {
+                    tsl2591.stop();
+                    max31865.stop();
+                } else {
                     processError(BLKBDY_FAULT, ERR_INVALID_MSG_DATA, msg.data[0]);
                 }
                 break;
@@ -171,46 +127,37 @@ static void pollCan(void) {
 }
 
 /** Processing. */
-static void processIrradianceResult(uint16_t msgId, struct result res) {
-    uint32_t value = res.value * 1000;
-    static uint32_t sampleId = 0;
+static void processIrradianceResult(float data) {
+    uint64_t value = data * 1000;
 
     /* CAN. */
-    char data[4];
-    memcpy(data, &value, 4);
-    canPort.write(CANMessage(msgId, data, 4));
+    char dataPack[5];
+    memcpy(dataPack, &value, 5);
+    canPort.write(CANMessage(BLKBDY_IRRAD_1_MEAS, dataPack, 5));
 
     /* Debugging. */
     printf(
-        "%02x%03x%01x%03x%05x",
+        "%02x%04x%10llx",
         PRELUDE,
-        msgId,
-        result::IRRADIANCE,
-        sampleId,
-        (uint32_t)(res.value * 1000)
+        BLKBDY_IRRAD_1_MEAS,
+        value
     );
-    ++sampleId;
 }
-static void processTemperatureResult(uint16_t msgId, struct result res) {
-    uint32_t value = res.value * 1000;
-    static uint32_t sampleId = 0;
+static void processTemperatureResult(float data) {
+    uint32_t value = data * 1000;
 
     /* CAN. */
-    uint64_t valueMerged = ((res.sensorId & 0xFF) << 31) | value;
-    char data[5];
-    memcpy(data, &valueMerged, 5);
-    canPort.write(CANMessage(msgId, data, 5));
+    char dataPack[4];
+    memcpy(dataPack, &value, 4);
+    canPort.write(CANMessage(BLKBDY_TEMP_MEAS, dataPack, 4));
 
     /* Debugging. */
     printf(
-        "%02x%03x%01x%03x%05x",
+        "%02x%04x%08x",
         PRELUDE,
-        msgId,
-        result::TEMPERATURE,
-        sampleId,
-        (uint32_t)(res.value * 1000)
+        BLKBDY_TEMP_MEAS,
+        value
     );
-    ++sampleId;
 }
 static void processError(uint16_t msgId, uint16_t errorCode, uint16_t errorContext) {
     uint16_t value = (errorCode & 0xFF) << 8 | (errorContext & 0xFF);
@@ -222,10 +169,9 @@ static void processError(uint16_t msgId, uint16_t errorCode, uint16_t errorConte
 
     /* Debugging. */
     printf(
-        "%02x%03x%03x%04x", 
+        "%02x%04x%04x", 
         PRELUDE,
         msgId,
-        errorCode,
-        errorContext
+        value
     );
 }

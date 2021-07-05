@@ -1,5 +1,5 @@
 /**
- * Project: Blackbody B Board
+ * Project: Blackbody B
  * File: mainB.hpp
  * Author: Matthew Yu (2021).
  * Organization: UT Solar Vehicles Team
@@ -28,56 +28,38 @@
  * L432KC specific.
  */
 
-
 /** Includes. */
 #include "mbed.h"
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include "ComIds.h"
-#include "Errors.h"
+#include <Misc/ComIds.hpp>
+#include <Misc/Errors.hpp>
+#include <Misc/Mtype.hpp>
+#include "IrradI2cSensor.hpp"
 
 /** Defines. */
 #define USB_TX USBTX /* A7. */
 #define USB_RX USBRX /* A2. */
 #define CAN_TX D2
 #define CAN_RX D10
+#define I2C_SDA D4
+#define I2C_SCL D5
 #define PRELUDE 0xFF
-#define SAMPLE_FREQ_HZ 10
-
-/** Struct definitions. */
-/** The result struct is used by information sources (i.e. sensors or CAN/serial
-    messages from sensors) to format data posting to the user. */
-struct result {
-    enum type {                 /* Result source. */
-        NONE, 
-        VOLTAGE, 
-        CURRENT, 
-        IRRADIANCE, 
-        TEMPERATURE, 
-        RESERVED1, 
-        RESERVED2,
-        RESERVED3
-    } sensorType;
-    uint32_t sensorId;          /* Sample ID of result. */
-    float value;                /* Value of the result. */
-};
+#define SAMPLE_FREQ_HZ_IRRAD 10
+#define QUEUE_SIZE 100
 
 /** Function definitions. */
+/** Main routine. */
 int mainB(void);
 
 /** Indicator management. */
 static void cycleLed(DigitalOut *dout, uint8_t numCycles, std::chrono::milliseconds delayMs);
 static void heartbeat(void);
 
-/** Sampling sensor data. */
-static void sampleIrradianceSensor(void);
-static void setReady(void);
-static void performTest(void);
-
 /** Communication Input Processing. */
 static void pollCan(void);
 
 /** Processing. */
-static void processIrradianceResult(uint16_t msgId, struct result res);
+static void processIrradianceResult(float data);
 static void processError(uint16_t msgId, uint16_t errorCode, uint16_t errorContext);

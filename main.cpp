@@ -1,5 +1,5 @@
 /**
- * Project: Blackbody Boards
+ * Project: Blackbody
  * File: main.cpp
  * Author: Matthew Yu (2021).
  * Organization: UT Solar Vehicles Team

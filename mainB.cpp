@@ -1,5 +1,5 @@
 /**
- * Project: Blackbody B Board
+ * Project: Blackbody B
  * File: mainB.cpp
  * Author: Matthew Yu (2021).
  * Organization: UT Solar Vehicles Team
@@ -28,26 +28,29 @@
  * L432KC specific.
  */
 
-
 /** Includes. */
 #include "mainB.hpp"
 
+/** Data structures. */
+static EventQueue queue(QUEUE_SIZE * EVENTS_EVENT_SIZE);
+
 /** LEDs. */
-DigitalOut ledCanTx(CAN_TX);
-DigitalOut ledCanRx(CAN_RX);
-DigitalOut ledHeartbeat(D3);
+static DigitalOut ledCanTx(CAN_TX);
+static DigitalOut ledCanRx(CAN_RX);
+static DigitalOut ledHeartbeat(D3);
 
 /** Tickers. */
-LowPowerTicker tickHeartbeat;
+static LowPowerTicker tickHeartbeat;
 
 /** Comm. */
 static BufferedSerial serialPort(USB_TX, USB_RX);
 static CAN canPort(CAN_RX, CAN_TX);
 
-/** Globals. */
-static bool sampleEnable;
-static bool isReady;
+/** Sensor. */
+static I2C i2c(I2C_SDA, I2C_SCL);
+static IrradI2cSensor tsl2591(&i2c, &queue, &processIrradianceResult);
 
+/** Function definitions. */
 /** Main routine. */
 int mainB() {
     /* Setup serial comm. */
@@ -66,14 +69,8 @@ int mainB() {
     /* Set a heartbeat toggle for 0.5 Hz. */
     tickHeartbeat.attach(&heartbeat, chrono::milliseconds(1000));
 
-    /* Start thread for sampling and processing sensor data. */
-    Timeout timeout;
-    timeout.attach(
-        callback(&setReady), 
-        chrono::milliseconds(1000 / SAMPLE_FREQ_HZ)
-    );
-    Thread threadTesting;
-    threadTesting.start(performTest);
+    /* Start execution of the TSL2591 sensor. */
+    tsl2591.start(chrono::milliseconds(1000 / SAMPLE_FREQ_HZ_IRRAD));
 
     while (true) {
         pollCan();
@@ -92,28 +89,6 @@ static void cycleLed(DigitalOut *dout, uint8_t numCycles, std::chrono::milliseco
     }
 }
 
-/** Sampling and processing sensor data. */
-static void sampleIrradianceSensor(void) {
-    struct result res = {
-        .sensorType = result::IRRADIANCE,
-        .sensorId = 0x29, /* TSL2591 only has one I2C address. */
-        .value = 0.0
-    };
-
-    /* TODO: Sample TSL2591. */
-
-    processIrradianceResult(BLKBDY_IRRAD_1_MEAS, res);
-}
-static void setReady(void) { isReady = true; }
-static void performTest(void) {
-    while (true) {
-        if (sampleEnable && isReady) {
-            sampleIrradianceSensor();
-            isReady = false;
-        }
-    }
-}
-
 /** Communication Input Processing. */
 static void pollCan(void) {
     static CANMessage msg;
@@ -126,10 +101,11 @@ static void pollCan(void) {
                    Everything else is an error. */
                 if (msg.len != 1) { 
                     processError(BLKBDY_FAULT, ERR_INVALID_MSG_DATA_LEN, msg.len);
-                }
-                else if (msg.data[0] == 0) { sampleEnable = true; }
-                else if (msg.data[0] == 1) { sampleEnable = false; }
-                else {
+                } else if (msg.data[0] == 0) {
+                    tsl2591.start(chrono::milliseconds(1000 / SAMPLE_FREQ_HZ_IRRAD));
+                } else if (msg.data[0] == 1) {
+                    tsl2591.stop();
+                } else {
                     processError(BLKBDY_FAULT, ERR_INVALID_MSG_DATA, msg.data[0]);
                 }
                 break;
@@ -147,25 +123,21 @@ static void pollCan(void) {
 }
 
 /** Processing. */
-static void processIrradianceResult(uint16_t msgId, struct result res) {
-    uint32_t value = res.value * 1000;
-    static uint32_t sampleId = 0;
+static void processIrradianceResult(float data) {
+    uint64_t value = data * 1000;
 
     /* CAN. */
-    char data[4];
-    memcpy(data, &value, 4);
-    canPort.write(CANMessage(msgId, data, 4));
+    char dataPack[5];
+    memcpy(dataPack, &value, 5);
+    canPort.write(CANMessage(BLKBDY_IRRAD_1_MEAS, dataPack, 5));
 
     /* Debugging. */
     printf(
-        "%02x%03x%01x%03x%05x",
+        "%02x%04x%10llx",
         PRELUDE,
-        msgId,
-        result::IRRADIANCE,
-        sampleId,
-        (uint32_t)(res.value * 1000)
+        BLKBDY_IRRAD_1_MEAS,
+        value
     );
-    ++sampleId;
 }
 static void processError(uint16_t msgId, uint16_t errorCode, uint16_t errorContext) {
     uint16_t value = (errorCode & 0xFF) << 8 | (errorContext & 0xFF);
@@ -177,10 +149,9 @@ static void processError(uint16_t msgId, uint16_t errorCode, uint16_t errorConte
 
     /* Debugging. */
     printf(
-        "%02x%03x%03x%04x", 
+        "%02x%04x%04x", 
         PRELUDE,
         msgId,
-        errorCode,
-        errorContext
+        value
     );
 }

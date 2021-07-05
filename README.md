@@ -21,11 +21,7 @@ in the firmware.
 
 ---
 ## TODO
-- Move Errors, ComIds to Mbed-Shared-Components.
-- Add exception handling to bad sensor data (post-calibration).
-- Migrate serial input processing, CAN input processing to class.
-- Create common com input processing class that encompasses the above.
-- Handle invalid input data as an exception, not an error.
+- Add multiple irrad/temp sensor support for Blackbody Type A.
 
 ---
 ## Operation

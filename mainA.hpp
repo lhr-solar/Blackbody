@@ -1,5 +1,5 @@
 /**
- * Project: Blackbody A Board
+ * Project: Blackbody A
  * File: mainA.hpp
  * Author: Matthew Yu (2021).
  * Organization: UT Solar Vehicles Team
@@ -29,61 +29,50 @@
  * L432KC specific.
  */
 
-
 /** Includes. */
 #include "mbed.h"
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include "ComIds.h"
-#include "Errors.h"
-#include "Fifo.cpp"
+#include <Misc/ComIds.hpp>
+#include <Misc/Errors.hpp>
+#include "IrradI2cSensor.hpp"
+#include "TempSpiSensor.hpp"
 
 /** Defines. */
 #define USB_TX USBTX /* A7. */
 #define USB_RX USBRX /* A2. */
 #define CAN_TX D2
 #define CAN_RX D10
+#define I2C_SDA D4
+#define I2C_SCL D5
+#define SPI_SDI D11
+#define SPI_SDO D12
+#define SPI_CLK D13
+#define SPI_CS0 A1
+#define SPI_CS1 A0
+#define SPI_CS2 D8
+#define SPI_CS3 D9
+#define SPI_CS4 A3
+#define SPI_CS5 D6
+#define SPI_CS6 A6
+#define SPI_CS7 D3
 #define PRELUDE 0xFF
 #define SAMPLE_FREQ_HZ_IRRAD 10
 #define SAMPLE_FREQ_HZ_TEMP 2
-#define MAX_TEMP_SENSORS 8
-
-/** Struct definitions. */
-/** The result struct is used by information sources (i.e. sensors or CAN/serial
-    messages from sensors) to format data posting to the user. */
-struct result {
-    enum type {                 /* Result source. */
-        NONE, 
-        VOLTAGE, 
-        CURRENT, 
-        IRRADIANCE, 
-        TEMPERATURE, 
-        RESERVED1, 
-        RESERVED2,
-        RESERVED3
-    } sensorType;
-    uint32_t sensorId;          /* Sample ID of result. */
-    float value;                /* Value of the result. */
-};
+#define QUEUE_SIZE 100
 
 /** Function definitions. */
+/** Main routine. */
 int mainA(void);
 
 /** Indicator Management. */
 static void cycleLed(DigitalOut *dout, uint8_t numCycles, std::chrono::milliseconds delayMs);
 
-/** Sampling sensor data. */
-static void sampleTempSensor(void);
-static void sampleIrradianceSensor(void);
-static void setReadyIrrad(void);
-static void setReadyTemp(void);
-static void performTest(void);
-
 /** Communication Input Processing. */
 static void pollCan(void);
 
 /** Processing. */
-static void processIrradianceResult(uint16_t msgId, struct result res);
-static void processTemperatureResult(uint16_t msgId, struct result res);
+static void processIrradianceResult(float data);
+static void processTemperatureResult(float data);
 static void processError(uint16_t msgId, uint16_t errorCode, uint16_t errorContext);
